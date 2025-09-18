@@ -2,11 +2,15 @@ import requests
 import csv
 import time
 import os
+import threading
+from flask import Flask, render_template_string
 
 # Files
 BURNER_FILE = "burner.csv"
 STATS_FILE = "stats.csv"
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
+
+app = Flask(__name__)
 
 def auction_tracker(filename=BURNER_FILE, fields=("price", "timestamp")):
     """Fetch auctions from API and save to burner.csv"""
@@ -40,14 +44,14 @@ def actual_stats_tracker():
             reader = list(csv.reader(f))
             # Skip grand total row if it exists
             if reader and reader[0][0] == "Grand Total":
-                data_rows = reader[1:]  
+                data_rows = reader[2:]  # skip grand total + header
             else:
                 data_rows = reader
     else:
         data_rows = []
 
     # Determine last session info
-    if data_rows and len(data_rows) > 1:  # header + data
+    if data_rows and len(data_rows) > 0:
         last_row = data_rows[-1]
         session_count = int(last_row[0]) + 1
         cumulative_total = int(last_row[2].replace(',', '')) + session_total
@@ -60,7 +64,7 @@ def actual_stats_tracker():
     # Skip if total hasn't changed
     if session_total == last_total:
         print("⚠️ Total price same as last session. Skipping update.")
-        return
+        return session_count, session_total, cumulative_total
 
     # Format numbers with commas
     session_total_fmt = f"{session_total:,}"
@@ -70,33 +74,76 @@ def actual_stats_tracker():
     new_row = [session_count, session_total_fmt, cumulative_total_fmt]
     data_rows.append(new_row)
 
-    # Calculate grand totals
-    grand_current = session_total_fmt
-    grand_total = cumulative_total_fmt
-
     # Write everything back to stats.csv
     with open(STATS_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         # Grand total row
-        writer.writerow(["Grand Total", grand_current, grand_total])
+        writer.writerow(["Grand Total", session_total_fmt, cumulative_total_fmt])
         # Header
         writer.writerow(["count", "current", "total"])
         # Data rows
         writer.writerows(data_rows)
 
     print(f"✅ Session {session_count}: {session_total_fmt} added (cumulative: {cumulative_total_fmt})")
+    return session_count, session_total, cumulative_total
 
-# --- Continuous loop ---
-while True:
-    try:
-        print("\n🔄 Fetching new auctions...")
-        auction_tracker()
-        prices = stats_tracker()
-        print(f"Found {len(prices)} auctions, total price: {sum(prices):,}")
-        actual_stats_tracker()
-        print("⏳ Waiting 60 seconds for next update...")
-        time.sleep(60)
-    except Exception as e:
-        print(f"⚠️ Error occurred: {e}")
-        print("Retrying in 60 seconds...")
-        time.sleep(60)
+def stats_loop():
+    """Background loop to update stats every 60 seconds"""
+    while True:
+        try:
+            print("\n🔄 Fetching new auctions...")
+            auction_tracker()
+            session_count, session_total, cumulative_total = actual_stats_tracker()
+            print(f"Session {session_count} complete. Waiting 60 seconds...")
+            time.sleep(60)
+        except Exception as e:
+            print(f"⚠️ Error occurred: {e}")
+            time.sleep(60)
+
+# Start background loop in a daemon thread
+threading.Thread(target=stats_loop, daemon=True).start()
+
+# --- Flask Web Routes ---
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skyblock Stats</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        table { border-collapse: collapse; width: 50%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>Skyblock Stats</h1>
+    {% if stats %}
+    <table>
+        <tr><th>Count</th><th>Current</th><th>Total</th></tr>
+        {% for row in stats %}
+        <tr>
+            <td>{{ row[0] }}</td>
+            <td>{{ row[1] }}</td>
+            <td>{{ row[2] }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No stats yet.</p>
+    {% endif %}
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    stats = []
+    if os.path.exists(STATS_FILE):
+        with open(STATS_FILE, "r", newline="", encoding="utf-8") as f:
+            reader = list(csv.reader(f))
+            stats = reader[2:]  # skip grand total + header
+    return render_template_string(HTML_TEMPLATE, stats=stats)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
