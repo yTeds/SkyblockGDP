@@ -85,18 +85,24 @@ threading.Thread(target=stats_loop, daemon=True).start()
 # --- Flask routes ---
 @app.route("/")
 def index():
-    grand_total = session_total = session_count = 0
+    grand_total = session_total = 0
     data_rows = []
 
     if os.path.exists(STATS_FILE):
         with open(STATS_FILE, "r", newline="", encoding="utf-8") as f:
             reader = list(csv.reader(f))
-            if reader:
+            if reader:  # only proceed if there are rows
                 if reader[0][0] == "Grand Total":
                     grand_total = reader[0][2]
                     session_total = reader[0][1]
                 if len(reader) > 2:
                     data_rows = reader[2:]  # skip grand total + header
+
+    # Fallback if CSV is empty or doesn't exist
+    else:
+        grand_total = "0"
+        session_total = "0"
+        data_rows = []
 
     html = """
     <html>
@@ -128,6 +134,7 @@ def index():
     </html>
     """
     return render_template_string(html, grand_total=grand_total, session_total=session_total, data_rows=data_rows)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
