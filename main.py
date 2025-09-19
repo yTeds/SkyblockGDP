@@ -1,5 +1,5 @@
 from flask import Flask, render_template_string, request, redirect, url_for
-import requests, threading, time, json, base64, os
+import requests, threading, time, json, base64, os, asyncio, aiohttp
 
 app = Flask(__name__)
 
@@ -20,7 +20,8 @@ stats = {
 
 # Cache for UUID -> username
 uuid_cache = {}
-uuid_queue = set()  # UUIDs pending conversion
+# Queue of UUIDs to convert
+uuid_queue = set()
 
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
 
@@ -45,19 +46,29 @@ def save_stats():
     requests.put(STATS_URL, headers=headers, json=data)
     print("Saved stats to GitHub")
 
-# === UUID -> Username Helper ===
-def uuid_to_name(uuid):
-    if uuid in uuid_cache:
-        return uuid_cache[uuid]
+# === Async UUID -> Username Helper ===
+async def fetch_uuid(session, uuid):
     try:
-        r = requests.get(f"https://api.mojang.com/user/profile/{uuid}", timeout=5)
-        if r.status_code == 200:
-            name = r.json().get("name", uuid[:8])
-            uuid_cache[uuid] = name
-            return name
+        async with session.get(f"https://api.mojang.com/user/profile/{uuid}", timeout=5) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                name = data.get("name", uuid[:8])
+                uuid_cache[uuid] = name
     except Exception as e:
         print(f"Error converting UUID {uuid}: {e}")
-    return uuid[:8]  # fallback short UUID
+
+def process_uuid_queue():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    uuids = list(uuid_queue)
+    uuid_queue.clear()
+    if not uuids:
+        return
+    async def main():
+        async with aiohttp.ClientSession() as session:
+            tasks = [fetch_uuid(session, u) for u in uuids]
+            await asyncio.gather(*tasks)
+    loop.run_until_complete(main())
 
 # === Background Stats Fetch ===
 def fetch_stats():
@@ -77,26 +88,18 @@ def fetch_stats():
                     stats["history"].append([])
                 stats["history"][-1].append(total_price)
 
-                # Track buyers and add new UUIDs to queue
+                # Track buyers
                 for auction in auctions:
                     buyer_uuid = auction.get("buyer")
                     price = auction["price"]
                     if buyer_uuid:
                         stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
-                        if buyer_uuid not in uuid_cache:
-                            uuid_queue.add(buyer_uuid)
+                        uuid_queue.add(buyer_uuid)  # queue UUID for conversion
 
                 save_stats()
 
-            # === Convert UUIDs in queue with retry ===
-            for uuid in list(uuid_queue):
-                try:
-                    name = uuid_to_name(uuid)
-                    if name != uuid[:8]:  # success
-                        uuid_queue.remove(uuid)
-                    time.sleep(0.2)  # avoid rate limits
-                except Exception as e:
-                    print(f"Error converting UUID {uuid}: {e}")
+            # Convert UUIDs asynchronously
+            process_uuid_queue()
 
             time.sleep(60)
         except Exception as e:
@@ -109,7 +112,7 @@ def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
     # Convert buyers to usernames safely
-    buyer_list = [(uuid_to_name(uuid), stats["buyers"][uuid]) for uuid in list(stats["buyers"].keys())]
+    buyer_list = [(uuid_cache.get(uuid, uuid[:8]), stats["buyers"][uuid]) for uuid in stats["buyers"]]
     buyer_list.sort(key=lambda x: x[1], reverse=True)
     top_buyers = buyer_list[:10]
 
