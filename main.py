@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, request
 import requests, threading, time, json, base64, os
 
 app = Flask(__name__)
@@ -15,14 +15,16 @@ stats = {
     "current": 0,
     "total": 0,
     "history": [],
-    "buyers": {}
+    "buyers": {}  # UUID: total_spent
 }
+
+# Cache for UUID -> username
+uuid_cache = {}
 
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
 
 # === GitHub Helpers ===
 def load_stats():
-    """Pull latest stats.json from GitHub"""
     global stats
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     r = requests.get(STATS_URL, headers=headers)
@@ -34,21 +36,27 @@ def load_stats():
         print("No stats.json found, starting fresh")
 
 def save_stats():
-    """Push stats.json to GitHub"""
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
     content = base64.b64encode(json.dumps(stats, indent=2).encode()).decode()
-    
-    # Need file SHA to update
     r = requests.get(STATS_URL, headers=headers).json()
     sha = r.get("sha", None)
-
-    data = {
-        "message": "Update stats.json",
-        "content": content,
-        "sha": sha
-    }
+    data = {"message": "Update stats.json", "content": content, "sha": sha}
     requests.put(STATS_URL, headers=headers, json=data)
     print("Saved stats to GitHub")
+
+# === UUID -> Username Helper ===
+def uuid_to_name(uuid):
+    if uuid in uuid_cache:
+        return uuid_cache[uuid]
+    try:
+        r = requests.get(f"https://api.mojang.com/user/profiles/{uuid}/names")
+        if r.status_code == 200:
+            name = r.json()[-1]["name"]
+            uuid_cache[uuid] = name
+            return name
+    except Exception as e:
+        print(f"Error converting UUID {uuid}: {e}")
+    return uuid[:8]  # fallback short UUID
 
 # === Background Stats Fetch ===
 def fetch_stats():
@@ -58,7 +66,6 @@ def fetch_stats():
             auctions = r["auctions"]
             total_price = sum(a["price"] for a in auctions)
 
-            # Only add if total changed
             if total_price != stats["current"]:
                 stats["count"] += 1
                 stats["current"] = total_price
@@ -71,11 +78,12 @@ def fetch_stats():
 
                 # Track buyers
                 for auction in auctions:
-                    buyer = auction.get("buyer", "Unknown")
+                    buyer_uuid = auction.get("buyer")
                     price = auction["price"]
-                    stats["buyers"][buyer] = stats["buyers"].get(buyer, 0) + price
+                    if buyer_uuid:
+                        stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
 
-                save_stats()  # Save to GitHub
+                save_stats()
 
             time.sleep(60)
         except Exception as e:
@@ -83,12 +91,23 @@ def fetch_stats():
             time.sleep(60)
 
 # === Web Routes ===
-@app.route("/")
+@app.route("/", methods=["GET"])
 def index():
-    # Calculate average per minute
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
-    # Sort buyers by total spent
-    sorted_buyers = sorted(stats["buyers"].items(), key=lambda x: x[1], reverse=True)
+
+    # Convert buyers to usernames
+    buyer_list = [(uuid_to_name(uuid), spent) for uuid, spent in stats["buyers"].items()]
+    buyer_list.sort(key=lambda x: x[1], reverse=True)
+    top_buyers = buyer_list[:10]
+
+    # Search feature
+    search_name = request.args.get("search", "").strip()
+    search_result = None
+    if search_name:
+        for name, spent in buyer_list:
+            if name.lower() == search_name.lower():
+                search_result = (name, spent)
+                break
 
     return render_template_string("""
     <html>
@@ -96,33 +115,14 @@ def index():
         <title>Skyblock GDP Stats</title>
         <meta http-equiv="refresh" content="60">
         <style>
-            body {
-                background: linear-gradient(to right, #1f1c2c, #928dab);
-                color: white;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                padding: 20px;
-            }
-            h1, h2 {
-                text-align: center;
-            }
-            .stats, .history, .leaderboard {
-                display: flex;
-                flex-wrap: wrap;
-                justify-content: center;
-                gap: 15px;
-                margin-top: 20px;
-            }
-            .card {
-                background: rgba(255,255,255,0.15);
-                padding: 15px;
-                border-radius: 10px;
-                min-width: 150px;
-                text-align: center;
-                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-            }
-            .history-card {
-                min-width: 250px;
-            }
+            body { background: linear-gradient(to right, #1f1c2c, #928dab); color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px;}
+            h1, h2 { text-align:center; }
+            .stats, .history, .leaderboard { display:flex; flex-wrap:wrap; justify-content:center; gap:15px; margin-top:20px;}
+            .card { background: rgba(255,255,255,0.15); padding:15px; border-radius:10px; min-width:150px; text-align:center; box-shadow:0 4px 8px rgba(0,0,0,0.2);}
+            .history-card { min-width:250px; }
+            form { text-align:center; margin-top:20px; }
+            input[type=text] { padding:5px; border-radius:5px; border:none; }
+            input[type=submit] { padding:5px 10px; border-radius:5px; border:none; cursor:pointer; background:#fff; color:#333; }
         </style>
     </head>
     <body>
@@ -146,18 +146,33 @@ def index():
             {% endfor %}
         </div>
 
-        <h2>Top Buyers</h2>
+        <h2>Top 10 Buyers</h2>
         <div class="leaderboard">
-            {% for buyer, spent in sorted_buyers %}
+            {% for name, spent in top_buyers %}
                 <div class="card">
-                    <strong>{{ buyer }}</strong><br>
-                    {{ "{:,}".format(spent) }}
+                    <strong>{{ name }}</strong><br>{{ "{:,}".format(spent) }}
                 </div>
             {% endfor %}
         </div>
+
+        <form method="get" action="/">
+            <input type="text" name="search" placeholder="Search player name" value="{{ request.args.get('search','') }}">
+            <input type="submit" value="Search">
+        </form>
+
+        {% if search_result %}
+            <div class="card" style="margin:20px auto; max-width:300px;">
+                <strong>{{ search_result[0] }}</strong><br>
+                Total spent: {{ "{:,}".format(search_result[1]) }}
+            </div>
+        {% elif search_name %}
+            <div class="card" style="margin:20px auto; max-width:300px;">
+                Player "{{ search_name }}" not found.
+            </div>
+        {% endif %}
     </body>
     </html>
-    """, stats=stats, avg=avg, sorted_buyers=sorted_buyers)
+    """, stats=stats, avg=avg, top_buyers=top_buyers, search_result=search_result, request=request, search_name=search_name)
 
 if __name__ == "__main__":
     load_stats()
