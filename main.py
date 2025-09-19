@@ -111,7 +111,7 @@ def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
     # Convert buyers to usernames safely
-    buyer_list = [(uuid_to_name_sync(uuid), stats["buyers"][uuid]) for uuid in stats["buyers"]]
+    buyer_list = [(uuid_to_name_sync(uuid), stats["buyers"][uuid]) for uuid in list(stats["buyers"].keys())]
     buyer_list.sort(key=lambda x: x[1], reverse=True)
     top_buyers = [(name, spent, idx+1) for idx, (name, spent) in enumerate(buyer_list[:10])]
 
