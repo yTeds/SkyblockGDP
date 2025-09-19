@@ -20,7 +20,7 @@ stats = {
 
 # Cache for UUID -> username
 uuid_cache = {}
-uuid_queue = set()  # UUIDs waiting for conversion
+uuid_queue = set()  # UUIDs pending conversion
 
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
 
@@ -50,7 +50,7 @@ def uuid_to_name(uuid):
     if uuid in uuid_cache:
         return uuid_cache[uuid]
     try:
-        r = requests.get(f"https://api.mojang.com/user/profile/{uuid}", timeout=2)
+        r = requests.get(f"https://api.mojang.com/user/profile/{uuid}", timeout=5)
         if r.status_code == 200:
             name = r.json().get("name", uuid[:8])
             uuid_cache[uuid] = name
@@ -77,7 +77,7 @@ def fetch_stats():
                     stats["history"].append([])
                 stats["history"][-1].append(total_price)
 
-                # Track buyers
+                # Track buyers and add new UUIDs to queue
                 for auction in auctions:
                     buyer_uuid = auction.get("buyer")
                     price = auction["price"]
@@ -88,12 +88,15 @@ def fetch_stats():
 
                 save_stats()
 
-            # Gradually convert UUIDs to names (max 5 per iteration)
-            for _ in range(min(5, len(uuid_queue))):
-                uuid = uuid_queue.pop()
-                name = uuid_to_name(uuid)
-                if name == uuid[:8]:  # failed conversion
-                    uuid_queue.add(uuid)
+            # === Convert UUIDs in queue with retry ===
+            for uuid in list(uuid_queue):
+                try:
+                    name = uuid_to_name(uuid)
+                    if name != uuid[:8]:  # success
+                        uuid_queue.remove(uuid)
+                    time.sleep(0.2)  # avoid rate limits
+                except Exception as e:
+                    print(f"Error converting UUID {uuid}: {e}")
 
             time.sleep(60)
         except Exception as e:
@@ -106,7 +109,7 @@ def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
     # Convert buyers to usernames safely
-    buyer_list = [(uuid_cache.get(uuid, uuid[:8]), stats["buyers"][uuid]) for uuid in stats["buyers"]]
+    buyer_list = [(uuid_to_name(uuid), stats["buyers"][uuid]) for uuid in list(stats["buyers"].keys())]
     buyer_list.sort(key=lambda x: x[1], reverse=True)
     top_buyers = buyer_list[:10]
 
