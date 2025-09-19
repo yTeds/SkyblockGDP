@@ -1,9 +1,9 @@
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, redirect, url_for
 import requests, threading, time, json, base64, os
 
 app = Flask(__name__)
 
-# GitHub settings
+# GitHub settings (set these as environment variables in Render)
 GITHUB_REPO = os.getenv("GITHUB_REPO", "username/reponame")
 GITHUB_FILE = "stats.json"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -15,12 +15,10 @@ stats = {
     "current": 0,
     "total": 0,
     "history": [],
-    "buyers": {}  # username: total_spent
+    "buyers": {}
 }
 
-# UUID -> username cache
-uuid_cache = {}
-
+uuid_cache = {}  # cache for UUID -> username
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
 
 # === GitHub Helpers ===
@@ -44,18 +42,30 @@ def save_stats():
     requests.put(STATS_URL, headers=headers, json=data)
     print("Saved stats to GitHub")
 
-# === UUID -> Minecraft Username ===
+# === Reset Stats ===
+def reset_stats():
+    global stats
+    stats = {
+        "count": 0,
+        "current": 0,
+        "total": 0,
+        "history": [],
+        "buyers": {}
+    }
+    save_stats()
+
+# === UUID -> Username Helper ===
 def uuid_to_name(uuid):
     if uuid in uuid_cache:
         return uuid_cache[uuid]
     try:
-        r = requests.get(f"https://api.mojang.com/user/profiles/{uuid}/names")
+        r = requests.get(f"https://api.minecraftservices.com/minecraft/profile/lookup/{uuid}")
         if r.status_code == 200:
-            name = r.json()[-1]["name"]
+            name = r.json()["name"]
             uuid_cache[uuid] = name
             return name
     except Exception as e:
-        print(f"UUID conversion error for {uuid}: {e}")
+        print(f"Error converting UUID {uuid}: {e}")
     return uuid[:8]  # fallback
 
 # === Background Stats Fetch ===
@@ -63,7 +73,7 @@ def fetch_stats():
     while True:
         try:
             r = requests.get(SKYBLOCK_API).json()
-            auctions = r.get("auctions", [])
+            auctions = r["auctions"]
             total_price = sum(a["price"] for a in auctions)
 
             if total_price != stats["current"]:
@@ -76,16 +86,14 @@ def fetch_stats():
                     stats["history"].append([])
                 stats["history"][-1].append(total_price)
 
-                # Track buyers with Minecraft usernames
+                # Track buyers
                 for auction in auctions:
                     buyer_uuid = auction.get("buyer")
                     price = auction["price"]
                     if buyer_uuid:
-                        buyer_name = uuid_to_name(buyer_uuid)
-                        stats["buyers"][buyer_name] = stats["buyers"].get(buyer_name, 0) + price
+                        stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
 
                 save_stats()
-
             time.sleep(60)
         except Exception as e:
             print("Error fetching stats:", e)
@@ -96,15 +104,19 @@ def fetch_stats():
 def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
-    # Sort top buyers
-    buyer_list = sorted(stats["buyers"].items(), key=lambda x: x[1], reverse=True)
+    # Convert buyers to usernames
+    buyer_list = [(uuid_to_name(uuid), spent) for uuid, spent in stats["buyers"].items()]
+    buyer_list.sort(key=lambda x: x[1], reverse=True)
     top_buyers = buyer_list[:10]
 
     # Search feature
     search_name = request.args.get("search", "").strip()
     search_result = None
     if search_name:
-        search_result = stats["buyers"].get(search_name)
+        for name, spent in buyer_list:
+            if name.lower() == search_name.lower():
+                search_result = (name, spent)
+                break
 
     return render_template_string("""
     <html>
@@ -115,11 +127,12 @@ def index():
             body { background: linear-gradient(to right, #1f1c2c, #928dab); color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px;}
             h1, h2 { text-align:center; }
             .stats, .history, .leaderboard { display:flex; flex-wrap:wrap; justify-content:center; gap:15px; margin-top:20px;}
-            .card { background: rgba(255,255,255,0.15); padding:15px; border-radius:10px; min-width:150px; text-align:center; box-shadow:0 4px 8px rgba(0,0,0,0.2);}
+            .card { background: rgba(255,255,255,0.15); padding:15px; border-radius:10px; min-width:150px; text-align:center; box-shadow:0 4px 8px rgba(0,0,0,0.2); }
             .history-card { min-width:250px; }
             form { text-align:center; margin-top:20px; }
-            input[type=text] { padding:5px; border-radius:5px; border:none; }
-            input[type=submit] { padding:5px 10px; border-radius:5px; border:none; cursor:pointer; background:#fff; color:#333; }
+            input[type=text], input[type=submit], button { padding:5px; border-radius:5px; border:none; cursor:pointer; }
+            input[type=submit], button { background:#fff; color:#333; }
+            button { margin-top:10px; }
         </style>
     </head>
     <body>
@@ -157,19 +170,28 @@ def index():
             <input type="submit" value="Search">
         </form>
 
-        {% if search_result is not none %}
+        {% if search_result %}
             <div class="card" style="margin:20px auto; max-width:300px;">
-                <strong>{{ search_name }}</strong><br>
-                Total spent: {{ "{:,}".format(search_result) }}
+                <strong>{{ search_result[0] }}</strong><br>
+                Total spent: {{ "{:,}".format(search_result[1]) }}
             </div>
         {% elif search_name %}
             <div class="card" style="margin:20px auto; max-width:300px;">
                 Player "{{ search_name }}" not found.
             </div>
         {% endif %}
+
+        <form method="post" action="/reset" style="text-align:center;">
+            <button type="submit">Reset Stats</button>
+        </form>
     </body>
     </html>
     """, stats=stats, avg=avg, top_buyers=top_buyers, search_result=search_result, request=request, search_name=search_name)
+
+@app.route("/reset", methods=["POST"])
+def reset():
+    reset_stats()
+    return redirect(url_for('index'))
 
 if __name__ == "__main__":
     load_stats()
