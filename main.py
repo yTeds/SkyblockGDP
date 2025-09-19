@@ -1,9 +1,9 @@
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect
 import requests, threading, time, json, base64, os
 
 app = Flask(__name__)
 
-# GitHub settings (set these as environment variables in Render)
+# GitHub settings (environment variables in Render)
 GITHUB_REPO = os.getenv("GITHUB_REPO", "username/reponame")
 GITHUB_FILE = "stats.json"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -15,10 +15,12 @@ stats = {
     "current": 0,
     "total": 0,
     "history": [],
-    "buyers": {}
+    "buyers": {}  # UUID: total_spent
 }
 
-uuid_cache = {}  # cache for UUID -> username
+# UUID -> Username cache
+uuid_cache = {}
+
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
 
 # === GitHub Helpers ===
@@ -42,31 +44,19 @@ def save_stats():
     requests.put(STATS_URL, headers=headers, json=data)
     print("Saved stats to GitHub")
 
-# === Reset Stats ===
-def reset_stats():
-    global stats
-    stats = {
-        "count": 0,
-        "current": 0,
-        "total": 0,
-        "history": [],
-        "buyers": {}
-    }
-    save_stats()
-
 # === UUID -> Username Helper ===
 def uuid_to_name(uuid):
     if uuid in uuid_cache:
         return uuid_cache[uuid]
     try:
         r = requests.get(f"https://api.minecraftservices.com/minecraft/profile/lookup/{uuid}")
-        if r.status_code == 200:
+        if r.status_code == 200 and "name" in r.json():
             name = r.json()["name"]
             uuid_cache[uuid] = name
             return name
     except Exception as e:
         print(f"Error converting UUID {uuid}: {e}")
-    return uuid[:8]  # fallback
+    return uuid[:8]  # fallback short UUID
 
 # === Background Stats Fetch ===
 def fetch_stats():
@@ -81,7 +71,7 @@ def fetch_stats():
                 stats["current"] = total_price
                 stats["total"] += total_price
 
-                # Track history in batches of 30
+                # Track history in chunks of 30
                 if len(stats["history"]) == 0 or len(stats["history"][-1]) >= 30:
                     stats["history"].append([])
                 stats["history"][-1].append(total_price)
@@ -94,6 +84,7 @@ def fetch_stats():
                         stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
 
                 save_stats()
+
             time.sleep(60)
         except Exception as e:
             print("Error fetching stats:", e)
@@ -104,8 +95,8 @@ def fetch_stats():
 def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
-    # Convert buyers to usernames
-    buyer_list = [(uuid_to_name(uuid), spent) for uuid, spent in stats["buyers"].items()]
+    # Safely iterate over a copy to avoid dictionary size change errors
+    buyer_list = [(uuid_to_name(uuid), spent) for uuid, spent in list(stats["buyers"].items())]
     buyer_list.sort(key=lambda x: x[1], reverse=True)
     top_buyers = buyer_list[:10]
 
@@ -127,12 +118,11 @@ def index():
             body { background: linear-gradient(to right, #1f1c2c, #928dab); color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px;}
             h1, h2 { text-align:center; }
             .stats, .history, .leaderboard { display:flex; flex-wrap:wrap; justify-content:center; gap:15px; margin-top:20px;}
-            .card { background: rgba(255,255,255,0.15); padding:15px; border-radius:10px; min-width:150px; text-align:center; box-shadow:0 4px 8px rgba(0,0,0,0.2); }
+            .card { background: rgba(255,255,255,0.15); padding:15px; border-radius:10px; min-width:150px; text-align:center; box-shadow:0 4px 8px rgba(0,0,0,0.2);}
             .history-card { min-width:250px; }
             form { text-align:center; margin-top:20px; }
-            input[type=text], input[type=submit], button { padding:5px; border-radius:5px; border:none; cursor:pointer; }
-            input[type=submit], button { background:#fff; color:#333; }
-            button { margin-top:10px; }
+            input[type=text] { padding:5px; border-radius:5px; border:none; }
+            input[type=submit], button { padding:5px 10px; border-radius:5px; border:none; cursor:pointer; background:#fff; color:#333; }
         </style>
     </head>
     <body>
@@ -181,7 +171,7 @@ def index():
             </div>
         {% endif %}
 
-        <form method="post" action="/reset" style="text-align:center;">
+        <form method="post" action="/reset">
             <button type="submit">Reset Stats</button>
         </form>
     </body>
@@ -190,8 +180,16 @@ def index():
 
 @app.route("/reset", methods=["POST"])
 def reset():
-    reset_stats()
-    return redirect(url_for('index'))
+    global stats
+    stats = {
+        "count": 0,
+        "current": 0,
+        "total": 0,
+        "history": [],
+        "buyers": {}
+    }
+    save_stats()
+    return redirect("/")
 
 if __name__ == "__main__":
     load_stats()
