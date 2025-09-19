@@ -7,7 +7,6 @@ app = Flask(__name__)
 GITHUB_REPO = os.getenv("GITHUB_REPO", "username/reponame")
 GITHUB_FILE = "stats.json"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-
 STATS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}"
 
 # In-memory stats
@@ -15,7 +14,8 @@ stats = {
     "count": 0,
     "current": 0,
     "total": 0,
-    "history": []
+    "history": [],
+    "buyers": {}
 }
 
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
@@ -58,6 +58,7 @@ def fetch_stats():
             auctions = r["auctions"]
             total_price = sum(a["price"] for a in auctions)
 
+            # Only add if total changed
             if total_price != stats["current"]:
                 stats["count"] += 1
                 stats["current"] = total_price
@@ -67,6 +68,12 @@ def fetch_stats():
                 if len(stats["history"]) == 0 or len(stats["history"][-1]) >= 30:
                     stats["history"].append([])
                 stats["history"][-1].append(total_price)
+
+                # Track buyers
+                for auction in auctions:
+                    buyer = auction.get("buyer", "Unknown")
+                    price = auction["price"]
+                    stats["buyers"][buyer] = stats["buyers"].get(buyer, 0) + price
 
                 save_stats()  # Save to GitHub
 
@@ -78,106 +85,79 @@ def fetch_stats():
 # === Web Routes ===
 @app.route("/")
 def index():
+    # Calculate average per minute
+    avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
+    # Sort buyers by total spent
+    sorted_buyers = sorted(stats["buyers"].items(), key=lambda x: x[1], reverse=True)
+
     return render_template_string("""
-    <!DOCTYPE html>
-    <html lang="en">
+    <html>
     <head>
-        <meta charset="UTF-8">
         <title>Skyblock GDP Stats</title>
         <meta http-equiv="refresh" content="60">
         <style>
             body {
+                background: linear-gradient(to right, #1f1c2c, #928dab);
+                color: white;
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: linear-gradient(to right, #1e3c72, #2a5298);
-                color: #f0f0f0;
-                margin: 0;
-                padding: 0;
-            }
-            .container {
-                max-width: 900px;
-                margin: 0 auto;
                 padding: 20px;
             }
             h1, h2 {
                 text-align: center;
             }
-            .stats {
-                display: flex;
-                justify-content: space-around;
-                margin-bottom: 30px;
-            }
-            .card {
-                background: rgba(255, 255, 255, 0.1);
-                padding: 20px;
-                border-radius: 10px;
-                text-align: center;
-                flex: 1;
-                margin: 0 10px;
-                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-            }
-            .card h3 {
-                margin: 10px 0;
-                font-size: 1.2rem;
-                color: #ffd700;
-            }
-            .history {
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-            }
-            .batch {
-                background: rgba(255, 255, 255, 0.1);
-                padding: 10px;
-                border-radius: 8px;
+            .stats, .history, .leaderboard {
                 display: flex;
                 flex-wrap: wrap;
-                gap: 5px;
+                justify-content: center;
+                gap: 15px;
+                margin-top: 20px;
             }
-            .batch span {
-                background: rgba(0,255,204,0.2);
-                padding: 3px 6px;
-                border-radius: 4px;
+            .card {
+                background: rgba(255,255,255,0.15);
+                padding: 15px;
+                border-radius: 10px;
+                min-width: 150px;
+                text-align: center;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            }
+            .history-card {
+                min-width: 250px;
             }
         </style>
     </head>
     <body>
-        <div class="container">
-            <h1>Skyblock GDP Stats</h1>
-            <div class="stats">
-                <div class="card">
-                    <h3>Count</h3>
-                    <p>{{ stats.count }}</p>
-                </div>
-                <div class="card">
-                    <h3>Current</h3>
-                    <p>{{ "{:,}".format(stats.current) }}</p>
-                </div>
-                <div class="card">
-                    <h3>Total</h3>
-                    <p>{{ "{:,}".format(stats.total) }}</p>
-                </div>
-                <div class="card">
-                    <h3>Average / min</h3>
-                    <p>{{ "{:,}".format(stats.total // stats.count if stats.count else 0) }}</p>
-                </div>
-            </div>
+        <h1>Skyblock GDP Stats</h1>
+        <div class="stats">
+            <div class="card">Count: {{ stats.count }}</div>
+            <div class="card">Current: {{ "{:,}".format(stats.current) }}</div>
+            <div class="card">Total: {{ "{:,}".format(stats.total) }}</div>
+            <div class="card">Average per min: {{ "{:,}".format(avg|int) }}</div>
+        </div>
 
-            <h2>History</h2>
-            <div class="history">
-                {% for group in stats.history %}
-                    <div class="batch">
-                        {% for price in group %}
-                            <span>{{ "{:,}".format(price) }}</span>
-                        {% endfor %}
-                    </div>
-                {% endfor %}
-            </div>
+        <h2>History</h2>
+        <div class="history">
+            {% for batch in stats.history %}
+                <div class="card history-card">
+                    <strong>Batch {{ loop.index }}:</strong><br>
+                    {% for price in batch %}
+                        {{ "{:,}".format(price) }}<br>
+                    {% endfor %}
+                </div>
+            {% endfor %}
+        </div>
+
+        <h2>Top Buyers</h2>
+        <div class="leaderboard">
+            {% for buyer, spent in sorted_buyers %}
+                <div class="card">
+                    <strong>{{ buyer }}</strong><br>
+                    {{ "{:,}".format(spent) }}
+                </div>
+            {% endfor %}
         </div>
     </body>
     </html>
-    """, stats=stats)
-
-
+    """, stats=stats, avg=avg, sorted_buyers=sorted_buyers)
 
 if __name__ == "__main__":
     load_stats()
