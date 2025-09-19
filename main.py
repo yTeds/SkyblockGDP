@@ -79,16 +79,96 @@ def fetch_stats():
 @app.route("/")
 def index():
     return render_template_string("""
-        <h1>Skyblock GDP Stats</h1>
-        <p>Count: {{ stats.count }}</p>
-        <p>Current: {{ "{:,}".format(stats.current) }}</p>
-        <p>Total: {{ "{:,}".format(stats.total) }}</p>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Skyblock GDP Stats</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(to right, #1e3c72, #2a5298);
+                color: #f0f0f0;
+                margin: 0;
+                padding: 0;
+            }
+            .container {
+                max-width: 900px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+            h1, h2 {
+                text-align: center;
+            }
+            .stats {
+                display: flex;
+                justify-content: space-around;
+                margin-bottom: 30px;
+            }
+            .card {
+                background: rgba(255, 255, 255, 0.1);
+                padding: 20px;
+                border-radius: 10px;
+                text-align: center;
+                flex: 1;
+                margin: 0 10px;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            }
+            .card h3 {
+                margin: 10px 0;
+                font-size: 1.2rem;
+                color: #ffd700;
+            }
+            .history {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 10px;
+            }
+            .batch {
+                background: rgba(255, 255, 255, 0.1);
+                padding: 10px;
+                border-radius: 8px;
+                overflow-wrap: anywhere;
+            }
+            .batch h4 {
+                margin: 0 0 5px 0;
+                font-size: 1rem;
+                color: #00ffcc;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Skyblock GDP Stats</h1>
+            <div class="stats">
+                <div class="card">
+                    <h3>Count</h3>
+                    <p>{{ stats.count }}</p>
+                </div>
+                <div class="card">
+                    <h3>Current</h3>
+                    <p>{{ "{:,}".format(stats.current) }}</p>
+                </div>
+                <div class="card">
+                    <h3>Total</h3>
+                    <p>{{ "{:,}".format(stats.total) }}</p>
+                </div>
+            </div>
 
-        <h2>History</h2>
-        {% for group in stats.history %}
-          <p>Batch {{ loop.index }}: {{ group }}</p>
-        {% endfor %}
+            <h2>History</h2>
+            <div class="history">
+                {% for group in stats.history %}
+                    <div class="batch">
+                        <h4>Batch {{ loop.index }}</h4>
+                        <p>{{ group }}</p>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    </body>
+    </html>
     """, stats=stats)
+
 
 if __name__ == "__main__":
     load_stats()
