@@ -3,7 +3,7 @@ import requests, threading, time, json, base64, os
 
 app = Flask(__name__)
 
-# GitHub settings (set these as environment variables in Render)
+# GitHub settings
 GITHUB_REPO = os.getenv("GITHUB_REPO", "username/reponame")
 GITHUB_FILE = "stats.json"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -15,10 +15,10 @@ stats = {
     "current": 0,
     "total": 0,
     "history": [],
-    "buyers": {}  # UUID: total_spent
+    "buyers": {}  # username: total_spent
 }
 
-# Cache for UUID -> username
+# UUID -> username cache
 uuid_cache = {}
 
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
@@ -44,7 +44,7 @@ def save_stats():
     requests.put(STATS_URL, headers=headers, json=data)
     print("Saved stats to GitHub")
 
-# === UUID -> Username Helper ===
+# === UUID -> Minecraft Username ===
 def uuid_to_name(uuid):
     if uuid in uuid_cache:
         return uuid_cache[uuid]
@@ -55,15 +55,15 @@ def uuid_to_name(uuid):
             uuid_cache[uuid] = name
             return name
     except Exception as e:
-        print(f"Error converting UUID {uuid}: {e}")
-    return uuid[:8]  # fallback short UUID
+        print(f"UUID conversion error for {uuid}: {e}")
+    return uuid[:8]  # fallback
 
 # === Background Stats Fetch ===
 def fetch_stats():
     while True:
         try:
             r = requests.get(SKYBLOCK_API).json()
-            auctions = r["auctions"]
+            auctions = r.get("auctions", [])
             total_price = sum(a["price"] for a in auctions)
 
             if total_price != stats["current"]:
@@ -71,17 +71,18 @@ def fetch_stats():
                 stats["current"] = total_price
                 stats["total"] += total_price
 
-                # Track history in chunks of 30
+                # Track history in batches of 30
                 if len(stats["history"]) == 0 or len(stats["history"][-1]) >= 30:
                     stats["history"].append([])
                 stats["history"][-1].append(total_price)
 
-                # Track buyers
+                # Track buyers with Minecraft usernames
                 for auction in auctions:
                     buyer_uuid = auction.get("buyer")
                     price = auction["price"]
                     if buyer_uuid:
-                        stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
+                        buyer_name = uuid_to_name(buyer_uuid)
+                        stats["buyers"][buyer_name] = stats["buyers"].get(buyer_name, 0) + price
 
                 save_stats()
 
@@ -90,39 +91,20 @@ def fetch_stats():
             print("Error fetching stats:", e)
             time.sleep(60)
 
-
-@app.route("/reset")
-def reset():
-    global stats
-    stats = {
-        "count": 0,
-        "current": 0,
-        "total": 0,
-        "history": [],
-        "buyers": {}
-    }
-    save_stats()  # Push the cleared stats to GitHub
-    return "Stats reset successfully!"
-
-
 # === Web Routes ===
 @app.route("/", methods=["GET"])
 def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
-    # Convert buyers to usernames
-    buyer_list = [(uuid_to_name(uuid), spent) for uuid, spent in stats["buyers"].items()]
-    buyer_list.sort(key=lambda x: x[1], reverse=True)
+    # Sort top buyers
+    buyer_list = sorted(stats["buyers"].items(), key=lambda x: x[1], reverse=True)
     top_buyers = buyer_list[:10]
 
     # Search feature
     search_name = request.args.get("search", "").strip()
     search_result = None
     if search_name:
-        for name, spent in buyer_list:
-            if name.lower() == search_name.lower():
-                search_result = (name, spent)
-                break
+        search_result = stats["buyers"].get(search_name)
 
     return render_template_string("""
     <html>
@@ -175,10 +157,10 @@ def index():
             <input type="submit" value="Search">
         </form>
 
-        {% if search_result %}
+        {% if search_result is not none %}
             <div class="card" style="margin:20px auto; max-width:300px;">
-                <strong>{{ search_result[0] }}</strong><br>
-                Total spent: {{ "{:,}".format(search_result[1]) }}
+                <strong>{{ search_name }}</strong><br>
+                Total spent: {{ "{:,}".format(search_result) }}
             </div>
         {% elif search_name %}
             <div class="card" style="margin:20px auto; max-width:300px;">
