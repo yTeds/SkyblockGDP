@@ -1,99 +1,96 @@
-# main.py
+from flask import Flask, render_template_string
+import requests
+import threading
+import time
+import json
 import os
-import redis
-from flask import Flask, render_template_string, jsonify
-
-REDIS_URL = os.environ.get("REDIS_URL")
-r = redis.from_url(REDIS_URL, decode_responses=True)
 
 app = Flask(__name__)
 
-TEMPLATE = """
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Skyblock GDP</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    :root{--bg:#0f1724;--card:#0b1220;--accent:#38bdf8;--muted:#94a3b8}
-    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#071027 0%, #0b1220 100%);color:#e6eef8;margin:0}
-    .wrap{max-width:900px;margin:28px auto;padding:20px}
-    header{display:flex;align-items:center;justify-content:space-between}
-    h1{color:var(--accent);margin:0}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:18px}
-    .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(2,6,23,.6)}
-    .big{font-size:1.8rem;margin:8px 0}
-    .muted{color:var(--muted);font-size:.9rem}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
-    th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.04);text-align:center}
-    th{color:#000;background:var(--accent);border-radius:6px}
-    .nav{margin-top:10px}
-    a{color:var(--accent);text-decoration:none}
-    footer{margin-top:18px;color:var(--muted);font-size:.85rem;text-align:center}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <header>
-      <h1>Skyblock GDP</h1>
-      <div class="muted">Auto-updates every 60s</div>
-    </header>
+DATA_FILE = "stats.json"
 
-    <div class="grid">
-      <div class="card">
-        <div class="muted">Session Count</div>
-        <div class="big">{{count}}</div>
-      </div>
-      <div class="card">
-        <div class="muted">Latest Session (current)</div>
-        <div class="big">{{latest_current}}</div>
-      </div>
-      <div class="card">
-        <div class="muted">Grand Total</div>
-        <div class="big">{{grand_total}}</div>
-      </div>
-    </div>
+# Load saved stats if file exists
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "r") as f:
+        saved = json.load(f)
+else:
+    saved = {"count": 0, "current": 0, "total": 0, "history": []}
 
-    <div class="card" style="margin-top:16px">
-      <div class="muted">History (latest 30 sessions)</div>
-      <table>
-        <tr><th>#</th><th>Price</th></tr>
-        {% for i, p in enumerate(history) %}
-          <tr><td>{{ i+1 }}</td><td>{{ "{:,}".format(p) }}</td></tr>
-        {% endfor %}
-      </table>
-    </div>
+stats = saved
 
-    <footer>Note: the fetcher runs separately and writes stats to Redis.</footer>
-  </div>
+SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
 
-  <script>
-    // refresh every 60s
-    setTimeout(()=>window.location.reload(), 60000);
-  </script>
-</body>
-</html>
-"""
 
+def save_stats():
+    """Save stats to file so they survive restarts"""
+    with open(DATA_FILE, "w") as f:
+        json.dump(stats, f)
+
+
+def fetch_stats():
+    while True:
+        try:
+            r = requests.get(SKYBLOCK_API).json()
+            auctions = r.get("auctions", [])
+            total_price = sum(a["price"] for a in auctions)
+
+            # Only add if total changed
+            if total_price != stats["current"]:
+                stats["count"] += 1
+                stats["current"] = total_price
+                stats["total"] += total_price
+
+                # Save to history (keep only last 30 for now)
+                stats["history"].append({
+                    "count": stats["count"],
+                    "current": total_price,
+                    "total": stats["total"]
+                })
+                if len(stats["history"]) > 30:
+                    stats["history"].pop(0)
+
+                save_stats()
+
+            time.sleep(60)
+        except Exception as e:
+            print("Error fetching stats:", e)
+            time.sleep(60)
+
+
+# Start background thread
+threading.Thread(target=fetch_stats, daemon=True).start()
+
+
+# Homepage with live stats
 @app.route("/")
 def index():
-    count = int(r.get("count") or 0)
-    latest_current = int(r.get("latest_total") or 0)
-    grand = int(r.get("grand_total") or 0)
-    raw_history = r.lrange("history", 0, -1) or []
-    history = [int(x) for x in raw_history]
-    return render_template_string(TEMPLATE, count=count, latest_current=f"{latest_current:,}", grand_total=f"{grand:,}", history=history)
+    return render_template_string("""
+        <h1>🌍 Skyblock GDP Stats</h1>
+        <p><b>Count:</b> {{ stats.count }}</p>
+        <p><b>Current:</b> {{ "{:,}".format(stats.current) }}</p>
+        <p><b>Total:</b> {{ "{:,}".format(stats.total) }}</p>
+        <p><a href="/history">📜 View History</a></p>
+    """, stats=stats)
 
-@app.route("/api/stats")
-def api_stats():
-    return jsonify({
-        "count": int(r.get("count") or 0),
-        "latest_current": int(r.get("latest_total") or 0),
-        "grand_total": int(r.get("grand_total") or 0),
-        "history": [int(x) for x in (r.lrange("history", 0, -1) or [])]
-    })
+
+# History page
+@app.route("/history")
+def history():
+    return render_template_string("""
+        <h1>📜 History (Last {{ stats.history|length }} sessions)</h1>
+        <table border="1" cellpadding="5">
+            <tr><th>Count</th><th>Current</th><th>Total</th></tr>
+            {% for h in stats.history %}
+            <tr>
+                <td>{{ h.count }}</td>
+                <td>{{ "{:,}".format(h.current) }}</td>
+                <td>{{ "{:,}".format(h.total) }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        <p><a href="/">⬅ Back to Stats</a></p>
+    """, stats=stats)
+
 
 if __name__ == "__main__":
-    # use gunicorn in production; for local testing:
     app.run(host="0.0.0.0", port=10000)
