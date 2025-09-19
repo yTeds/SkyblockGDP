@@ -1,5 +1,5 @@
 from flask import Flask, render_template_string, request, redirect, url_for
-import requests, threading, time, json, base64, os
+import requests, threading, time, json, base64, os, asyncio, aiohttp
 
 app = Flask(__name__)
 
@@ -22,6 +22,10 @@ stats = {
 uuid_cache = {}
 
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
+UUID_API_URL = "https://api.mojang.com/user/profile/{}"
+MAX_CONCURRENT_REQUESTS = 20
+
+lock = threading.Lock()
 
 # === GitHub Helpers ===
 def load_stats():
@@ -44,19 +48,30 @@ def save_stats():
     requests.put(STATS_URL, headers=headers, json=data)
     print("Saved stats to GitHub")
 
-# === UUID -> Username Helper ===
-def uuid_to_name(uuid):
+# === Async UUID -> Username Helper ===
+async def fetch_name(session, uuid):
     if uuid in uuid_cache:
         return uuid_cache[uuid]
     try:
-        r = requests.get(f"https://api.mojang.com/user/profile/{uuid}", timeout=5)
-        if r.status_code == 200:
-            name = r.json().get("name", uuid[:8])
-            uuid_cache[uuid] = name
-            return name
+        async with session.get(UUID_API_URL.format(uuid), timeout=10) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                name = data.get("name", uuid[:8])
+                uuid_cache[uuid] = name
+                return name
     except Exception as e:
         print(f"Error converting UUID {uuid}: {e}")
-    return uuid[:8]  # fallback short UUID
+    return uuid[:8]
+
+async def convert_all_uuids_async(uuids):
+    connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT_REQUESTS)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [fetch_name(session, uuid) for uuid in uuids]
+        names = await asyncio.gather(*tasks)
+    return dict(zip(uuids, names))
+
+def convert_all_uuids(uuids):
+    return asyncio.run(convert_all_uuids_async(uuids))
 
 # === Background Stats Fetch ===
 def fetch_stats():
@@ -66,29 +81,29 @@ def fetch_stats():
             auctions = r.get("auctions", [])
             total_price = sum(a["price"] for a in auctions)
 
-            if total_price != stats["current"]:
-                stats["count"] += 1
-                stats["current"] = total_price
-                stats["total"] += total_price
+            with lock:
+                if total_price != stats["current"]:
+                    stats["count"] += 1
+                    stats["current"] = total_price
+                    stats["total"] += total_price
 
-                # Track history in chunks of 30
-                if len(stats["history"]) == 0 or len(stats["history"][-1]) >= 30:
-                    stats["history"].append([])
-                stats["history"][-1].append(total_price)
+                    if len(stats["history"]) == 0 or len(stats["history"][-1]) >= 30:
+                        stats["history"].append([])
+                    stats["history"][-1].append(total_price)
 
-                # Track buyers
-                for auction in auctions:
-                    buyer_uuid = auction.get("buyer")
-                    price = auction["price"]
-                    if buyer_uuid:
-                        stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
+                    for auction in auctions:
+                        buyer_uuid = auction.get("buyer")
+                        price = auction["price"]
+                        if buyer_uuid:
+                            stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
 
-                save_stats()
+                    save_stats()
 
             # Convert UUIDs in background to avoid blocking
-            for uuid in list(stats["buyers"].keys()):
-                if uuid not in uuid_cache:
-                    uuid_to_name(uuid)
+            uuids_to_convert = [u for u in stats["buyers"].keys() if u not in uuid_cache]
+            if uuids_to_convert:
+                converted = convert_all_uuids(uuids_to_convert)
+                uuid_cache.update(converted)
 
             time.sleep(60)
         except Exception as e:
@@ -100,12 +115,12 @@ def fetch_stats():
 def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
-    # Convert buyers to usernames safely
-    buyer_list = [(uuid_to_name(uuid), stats["buyers"][uuid]) for uuid in list(stats["buyers"].keys())]
+    with lock:
+        buyer_list = [(uuid_cache.get(uuid, uuid[:8]), stats["buyers"][uuid]) for uuid in list(stats["buyers"].keys())]
+
     buyer_list.sort(key=lambda x: x[1], reverse=True)
     top_buyers = buyer_list[:10]
 
-    # Search feature
     search_name = request.args.get("search", "").strip()
     search_result = None
     if search_name:
@@ -183,19 +198,19 @@ def index():
     </html>
     """, stats=stats, avg=avg, top_buyers=top_buyers, search_result=search_result, request=request, search_name=search_name)
 
-# === Reset Stats ===
 @app.route("/reset", methods=["POST"])
 def reset():
     global stats
-    stats = {
-        "count": 0,
-        "current": 0,
-        "total": 0,
-        "history": [],
-        "buyers": {}
-    }
-    uuid_cache.clear()
-    save_stats()
+    with lock:
+        stats = {
+            "count": 0,
+            "current": 0,
+            "total": 0,
+            "history": [],
+            "buyers": {}
+        }
+        uuid_cache.clear()
+        save_stats()
     return redirect(url_for('index'))
 
 if __name__ == "__main__":
