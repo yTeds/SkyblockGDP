@@ -21,9 +21,8 @@ stats = {
 # Cache for UUID -> username
 uuid_cache = {}
 
-# Queue of UUIDs to convert with retry counts
-uuid_queue = {}  # uuid: retry_count
-MAX_RETRIES = 7
+# Queue for UUIDs that need conversion
+uuid_queue = set()
 
 SKYBLOCK_API = "https://api.hypixel.net/v2/skyblock/auctions_ended"
 
@@ -49,47 +48,32 @@ def save_stats():
     print("Saved stats to GitHub")
 
 # === UUID -> Username Helper ===
-async def fetch_uuid(session, uuid):
-    try:
-        async with session.get(f"https://api.mojang.com/user/profile/{uuid}", timeout=10) as r:
-            if r.status == 200:
-                data = await r.json()
-                name = data.get("name", uuid[:8])
-                uuid_cache[uuid] = name
-                return True
-    except Exception as e:
-        print(f"Error converting UUID {uuid}: {e}")
-    return False
-
-async def process_uuid_queue():
-    global uuid_queue
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        for uuid in list(uuid_queue.keys()):
-            tasks.append(convert_uuid(session, uuid))
-        await asyncio.gather(*tasks)
-
-async def convert_uuid(session, uuid):
-    success = await fetch_uuid(session, uuid)
-    if success:
-        uuid_queue.pop(uuid, None)
-    else:
-        uuid_queue[uuid] += 1
-        if uuid_queue[uuid] > MAX_RETRIES:
-            print(f"Failed to convert UUID {uuid} after {MAX_RETRIES} retries")
-            uuid_queue.pop(uuid, None)
-
-def uuid_to_name(uuid):
+def uuid_to_name_sync(uuid):
+    """Try to convert UUID to name (blocking)."""
     if uuid in uuid_cache:
         return uuid_cache[uuid]
-    if uuid not in uuid_queue:
-        uuid_queue[uuid] = 0
-    return uuid[:8]  # fallback short UUID
+    try:
+        r = requests.get(f"https://api.mojang.com/user/profile/{uuid}", timeout=5)
+        if r.status_code == 200:
+            name = r.json().get("name", uuid[:8])
+            uuid_cache[uuid] = name
+            return name
+    except Exception as e:
+        print(f"Error converting UUID {uuid}: {e}")
+    return uuid[:8]
+
+# Background async UUID converter
+async def process_uuid_queue():
+    while True:
+        if uuid_queue:
+            uuids = list(uuid_queue)
+            for uuid in uuids:
+                name = uuid_to_name_sync(uuid)
+                uuid_queue.discard(uuid)
+        await asyncio.sleep(1)  # avoid tight loop
 
 # === Background Stats Fetch ===
 def fetch_stats():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     while True:
         try:
             r = requests.get(SKYBLOCK_API, timeout=10).json()
@@ -106,20 +90,15 @@ def fetch_stats():
                     stats["history"].append([])
                 stats["history"][-1].append(total_price)
 
-                # Track buyers
+                # Track buyers and add UUIDs to queue
                 for auction in auctions:
                     buyer_uuid = auction.get("buyer")
                     price = auction["price"]
                     if buyer_uuid:
                         stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
-                        # add to UUID queue
-                        if buyer_uuid not in uuid_cache and buyer_uuid not in uuid_queue:
-                            uuid_queue[buyer_uuid] = 0
+                        uuid_queue.add(buyer_uuid)
 
                 save_stats()
-
-            # Process UUID queue asynchronously
-            loop.run_until_complete(process_uuid_queue())
 
             time.sleep(60)
         except Exception as e:
@@ -132,17 +111,17 @@ def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
     # Convert buyers to usernames safely
-    buyer_list = [(uuid_to_name(uuid), stats["buyers"][uuid]) for uuid in list(stats["buyers"].keys())]
+    buyer_list = [(uuid_to_name_sync(uuid), stats["buyers"][uuid]) for uuid in stats["buyers"]]
     buyer_list.sort(key=lambda x: x[1], reverse=True)
-    top_buyers = buyer_list[:10]
+    top_buyers = [(name, spent, idx+1) for idx, (name, spent) in enumerate(buyer_list[:10])]
 
     # Search feature
     search_name = request.args.get("search", "").strip()
     search_result = None
     if search_name:
-        for name, spent in buyer_list:
+        for idx, (name, spent) in enumerate(buyer_list):
             if name.lower() == search_name.lower():
-                search_result = (name, spent)
+                search_result = (name, spent, idx+1)
                 break
 
     return render_template_string("""
@@ -184,9 +163,9 @@ def index():
 
         <h2>Top 10 Buyers</h2>
         <div class="leaderboard">
-            {% for name, spent in top_buyers %}
+            {% for name, spent, rank in top_buyers %}
                 <div class="card">
-                    <strong>{{ name }}</strong><br>{{ "{:,}".format(spent) }}
+                    <strong>{{ name }} (#{{ rank }})</strong><br>{{ "{:,}".format(spent) }}
                 </div>
             {% endfor %}
         </div>
@@ -198,7 +177,7 @@ def index():
 
         {% if search_result %}
             <div class="card" style="margin:20px auto; max-width:300px;">
-                <strong>{{ search_result[0] }}</strong><br>
+                <strong>{{ search_result[0] }} (#{{ search_result[2] }})</strong><br>
                 Total spent: {{ "{:,}".format(search_result[1]) }}
             </div>
         {% elif search_name %}
@@ -217,7 +196,7 @@ def index():
 # === Reset Stats ===
 @app.route("/reset", methods=["POST"])
 def reset():
-    global stats, uuid_queue
+    global stats
     stats = {
         "count": 0,
         "current": 0,
@@ -232,5 +211,9 @@ def reset():
 
 if __name__ == "__main__":
     load_stats()
+    # Start UUID processing loop
+    loop = asyncio.get_event_loop()
+    loop.create_task(process_uuid_queue())
+    # Start stats fetching
     threading.Thread(target=fetch_stats, daemon=True).start()
     app.run(host="0.0.0.0", port=10000)
