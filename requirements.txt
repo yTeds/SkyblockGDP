@@ -1,2 +1,4 @@
-requests
 Flask
+requests
+redis
+gunicorn
