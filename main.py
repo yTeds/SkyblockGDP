@@ -84,6 +84,7 @@ def index():
     <head>
         <meta charset="UTF-8">
         <title>Skyblock GDP Stats</title>
+        <meta http-equiv="refresh" content="60">
         <style>
             body {
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -120,20 +121,22 @@ def index():
                 color: #ffd700;
             }
             .history {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                display: flex;
+                flex-direction: column;
                 gap: 10px;
             }
             .batch {
                 background: rgba(255, 255, 255, 0.1);
                 padding: 10px;
                 border-radius: 8px;
-                overflow-wrap: anywhere;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
             }
-            .batch h4 {
-                margin: 0 0 5px 0;
-                font-size: 1rem;
-                color: #00ffcc;
+            .batch span {
+                background: rgba(0,255,204,0.2);
+                padding: 3px 6px;
+                border-radius: 4px;
             }
         </style>
     </head>
@@ -153,14 +156,19 @@ def index():
                     <h3>Total</h3>
                     <p>{{ "{:,}".format(stats.total) }}</p>
                 </div>
+                <div class="card">
+                    <h3>Average / min</h3>
+                    <p>{{ "{:,}".format(stats.total // stats.count if stats.count else 0) }}</p>
+                </div>
             </div>
 
             <h2>History</h2>
             <div class="history">
                 {% for group in stats.history %}
                     <div class="batch">
-                        <h4>Batch {{ loop.index }}</h4>
-                        <p>{{ group }}</p>
+                        {% for price in group %}
+                            <span>{{ "{:,}".format(price) }}</span>
+                        {% endfor %}
                     </div>
                 {% endfor %}
             </div>
@@ -168,6 +176,7 @@ def index():
     </body>
     </html>
     """, stats=stats)
+
 
 
 if __name__ == "__main__":
