@@ -231,29 +231,11 @@ def index():
                 Player "{{ search_name }}" not found.
             </div>
         {% endif %}
-
-        <form method="post" action="/reset">
-            <button type="submit">Reset Stats</button>
         </form>
     </body>
     </html>
     """, stats=stats, avg=avg, top_buyers=top_buyers, search_result=search_result, request=request, search_name=search_name)
 
-# === Reset Stats ===
-@app.route("/reset", methods=["POST"])
-def reset():
-    global stats, uuid_queue
-    stats = {
-        "count": 0,
-        "current": 0,
-        "total": 0,
-        "history": [],
-        "buyers": {}
-    }
-    uuid_cache.clear()
-    uuid_queue.clear()
-    save_stats()
-    return redirect(url_for('index'))
 
 if __name__ == "__main__":
     load_stats()
