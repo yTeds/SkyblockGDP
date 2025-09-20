@@ -34,10 +34,23 @@ def load_stats():
     r = requests.get(STATS_URL, headers=headers)
     if r.status_code == 200:
         content = base64.b64decode(r.json()["content"]).decode()
-        stats.update(json.loads(content))
-        print("Loaded stats from GitHub")
+        loaded = json.loads(content)
+
+        # Migrate old buyers format (uuid -> int) into new format
+        if "buyers" in loaded:
+            migrated_buyers = {}
+            for uuid, data in loaded["buyers"].items():
+                if isinstance(data, int):  # old format
+                    migrated_buyers[uuid] = {"name": uuid[:8], "spent": data}
+                elif isinstance(data, dict):  # already new format
+                    migrated_buyers[uuid] = data
+            loaded["buyers"] = migrated_buyers
+
+        stats.update(loaded)
+        print("Loaded stats from GitHub (with migration check)")
     else:
         print("No stats.json found, starting fresh")
+
 
 def save_stats():
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
