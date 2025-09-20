@@ -199,6 +199,7 @@ def index():
                 h2 {
                     text-align: center;
                     margin-top: 40px;
+                    font-size: 1.8em;
                 }
                 .stats {
                     display: flex;
@@ -244,30 +245,47 @@ def index():
                 }
                 .card {
                     background: #1c1c22;
-                    padding: 12px;
+                    padding: 15px;
                     border-radius: 10px;
-                    min-width: 150px;
+                    min-width: 160px;
                     text-align: center;
                     box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+                    font-size: 1.1em;
                 }
                 .history-card { min-width: 160px; }
                 form {
                     text-align: center;
-                    margin-top: 20px;
+                    margin-top: 30px;
                 }
-                input[type=text], input[type=submit] {
-                    padding: 8px 12px;
-                    border-radius: 5px;
+                input[type=text] {
+                    width: 90%;
+                    max-width: 400px;
+                    padding: 12px 15px;
+                    border-radius: 8px;
                     border: none;
-                    margin: 5px;
+                    font-size: 1.1em;
+                    margin-bottom: 10px;
                 }
                 input[type=submit] {
+                    padding: 10px 18px;
+                    border-radius: 8px;
+                    border: none;
+                    font-size: 1.1em;
                     background: #2575fc;
                     color: white;
                     cursor: pointer;
                 }
                 input[type=submit]:hover {
                     background: #1a5ed8;
+                }
+                @media (max-width: 600px) {
+                    .stats, .history, .leaderboard {
+                        flex-direction: column;
+                        align-items: center;
+                    }
+                    input[type=text] {
+                        width: 100%;
+                    }
                 }
             </style>
         </head>
@@ -322,16 +340,17 @@ def index():
             <form method="get" action="/">
                 <input type="text" name="search" placeholder="Search player name"
                        value="{{ request.args.get('search','') }}">
+                <br>
                 <input type="submit" value="Search">
             </form>
 
             {% if search_result %}
-                <div class="card" style="margin:20px auto; max-width:300px;">
+                <div class="card" style="margin:20px auto; max-width:300px; font-size:1.2em;">
                     <strong>{{ search_result[0] }} (#{{ search_result[2] }})</strong><br>
                     Total spent: {{ "{:,}".format(search_result[1]) }}
                 </div>
             {% elif search_name %}
-                <div class="card" style="margin:20px auto; max-width:300px;">
+                <div class="card" style="margin:20px auto; max-width:300px; font-size:1.2em;">
                     Player "{{ search_name }}" not found.
                 </div>
             {% endif %}
@@ -339,6 +358,7 @@ def index():
     </html>
     """, stats=stats, avg=avg, top_buyers=top_buyers,
        search_result=search_result, request=request, search_name=search_name)
+
 
 
 
