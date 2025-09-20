@@ -155,11 +155,17 @@ def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
     # Build buyer list with UUID, name, spent
-    buyer_list = [(uuid, data["name"], data["spent"]) for uuid, data in stats["buyers"].items()]
+    buyer_list = [
+        (uuid, data["name"], data["spent"])
+        for uuid, data in stats["buyers"].items()
+    ]
     buyer_list.sort(key=lambda x: x[2], reverse=True)
 
     # Top 10 with ranks
-    top_buyers = [(i+1, name, spent) for i, (_, name, spent) in enumerate(buyer_list[:10])]
+    top_buyers = [
+        (i + 1, name, spent)
+        for i, (_, name, spent) in enumerate(buyer_list[:10])
+    ]
 
     # Search feature
     search_name = request.args.get("search", "").strip()
@@ -167,74 +173,107 @@ def index():
     if search_name:
         for i, (_, name, spent) in enumerate(buyer_list):
             if name.lower() == search_name.lower():
-                search_result = (name, spent, i+1)  # include rank
+                search_result = (name, spent, i + 1)  # include rank
                 break
 
     return render_template_string("""
     <html>
-    <head>
-        <title>Skyblock GDP Stats</title>
-        <meta http-equiv="refresh" content="60">
-        <style>
-            body { background: linear-gradient(to right, #1f1c2c, #928dab); color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px;}
-            h1, h2 { text-align:center; }
-            .stats, .history, .leaderboard { display:flex; flex-wrap:wrap; justify-content:center; gap:15px; margin-top:20px;}
-            .card { background: rgba(255,255,255,0.15); padding:15px; border-radius:10px; min-width:150px; text-align:center; box-shadow:0 4px 8px rgba(0,0,0,0.2);}
-            .history-card { min-width:250px; }
-            form { text-align:center; margin-top:20px; }
-            input[type=text], input[type=submit], button { padding:5px; border-radius:5px; border:none; cursor:pointer; }
-            input[type=submit], button { background:#fff; color:#333; }
-        </style>
-    </head>
-    <body>
-        <h1>Skyblock GDP Stats</h1>
-        <div class="stats">
-            <div class="card">Count: {{ stats.count }}</div>
-            <div class="card">Current: {{ "{:,}".format(stats.current) }}</div>
-            <div class="card">Total: {{ "{:,}".format(stats.total) }}</div>
-            <div class="card">Average per min: {{ "{:,}".format(avg|int) }}</div>
-        </div>
-
-        <h2>History</h2>
-        <div class="history">
-            {% for batch in stats.history %}
-                <div class="card history-card">
-                    <strong>Batch {{ loop.index }}:</strong><br>
-                    {% for price in batch %}
-                        {{ "{:,}".format(price) }}<br>
-                    {% endfor %}
-                </div>
-            {% endfor %}
-        </div>
-
-        <h2>Top 10 Buyers</h2>
-        <div class="leaderboard">
-            {% for rank, name, spent in top_buyers %}
-                <div class="card">
-                    <strong>{{ rank }}. {{ name }}</strong><br>{{ "{:,}".format(spent) }}
-                </div>
-            {% endfor %}
-        </div>
-
-        <form method="get" action="/">
-            <input type="text" name="search" placeholder="Search player name" value="{{ request.args.get('search','') }}">
-            <input type="submit" value="Search">
-        </form>
-
-        {% if search_result %}
-            <div class="card" style="margin:20px auto; max-width:300px;">
-                <strong>{{ search_result[0] }} (#{{ search_result[2] }})</strong><br>
-                Total spent: {{ "{:,}".format(search_result[1]) }}
+        <head>
+            <title>Skyblock GDP Stats</title>
+            <meta http-equiv="refresh" content="60">
+            <style>
+                body {
+                    background: linear-gradient(to right, #1f1c2c, #928dab);
+                    color: white;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    padding: 20px;
+                }
+                h1, h2 { text-align: center; }
+                .stats, .history, .leaderboard {
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: center;
+                    gap: 15px;
+                    margin-top: 20px;
+                }
+                .card {
+                    background: rgba(255, 255, 255, 0.15);
+                    padding: 15px;
+                    border-radius: 10px;
+                    min-width: 150px;
+                    text-align: center;
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                }
+                .history-card { min-width: 250px; }
+                form {
+                    text-align: center;
+                    margin-top: 20px;
+                }
+                input[type=text], input[type=submit], button {
+                    padding: 5px;
+                    border-radius: 5px;
+                    border: none;
+                    cursor: pointer;
+                }
+                input[type=submit], button {
+                    background: #fff;
+                    color: #333;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>Skyblock GDP Stats</h1>
+            
+            <div class="stats">
+                <div class="card">Count: {{ stats.count }}</div>
+                <div class="card">Current: {{ "{:,}".format(stats.current) }}</div>
+                <div class="card">Total: {{ "{:,}".format(stats.total) }}</div>
+                <div class="card">Average per min: {{ "{:,}".format(avg|int) }}</div>
             </div>
-        {% elif search_name %}
-            <div class="card" style="margin:20px auto; max-width:300px;">
-                Player "{{ search_name }}" not found.
+
+            <h2>History</h2>
+            <div class="history">
+                {% for batch in stats.history %}
+                    <div class="card history-card">
+                        <strong>Batch {{ loop.index }}:</strong><br>
+                        {% for price in batch %}
+                            {{ "{:,}".format(price) }}<br>
+                        {% endfor %}
+                    </div>
+                {% endfor %}
             </div>
-        {% endif %}
-        </form>
-    </body>
+
+            <h2>Top 10 Buyers</h2>
+            <div class="leaderboard">
+                {% for rank, name, spent in top_buyers %}
+                    <div class="card">
+                        <strong>{{ rank }}. {{ name }}</strong><br>
+                        {{ "{:,}".format(spent) }}
+                    </div>
+                {% endfor %}
+            </div>
+
+            <form method="get" action="/">
+                <input type="text" name="search" placeholder="Search player name"
+                       value="{{ request.args.get('search','') }}">
+                <input type="submit" value="Search">
+            </form>
+
+            {% if search_result %}
+                <div class="card" style="margin:20px auto; max-width:300px;">
+                    <strong>{{ search_result[0] }} (#{{ search_result[2] }})</strong><br>
+                    Total spent: {{ "{:,}".format(search_result[1]) }}
+                </div>
+            {% elif search_name %}
+                <div class="card" style="margin:20px auto; max-width:300px;">
+                    Player "{{ search_name }}" not found.
+                </div>
+            {% endif %}
+        </body>
     </html>
-    """, stats=stats, avg=avg, top_buyers=top_buyers, search_result=search_result, request=request, search_name=search_name)
+    """, stats=stats, avg=avg, top_buyers=top_buyers,
+       search_result=search_result, request=request, search_name=search_name)
+
 
 
 if __name__ == "__main__":
