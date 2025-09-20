@@ -183,13 +183,59 @@ def index():
             <meta http-equiv="refresh" content="60">
             <style>
                 body {
-                    background: linear-gradient(to right, #1f1c2c, #928dab);
-                    color: white;
+                    background: #0e0e10;
+                    color: #f5f5f5;
                     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                     padding: 20px;
                 }
-                h1, h2 { text-align: center; }
-                .stats, .history, .leaderboard {
+                h1 {
+                    text-align: center;
+                    font-size: 2.5em;
+                    margin-bottom: 10px;
+                    background: linear-gradient(to right, #6a11cb, #2575fc);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                }
+                h2 {
+                    text-align: center;
+                    margin-top: 40px;
+                }
+                .stats {
+                    display: flex;
+                    flex-wrap: wrap;
+                    justify-content: center;
+                    gap: 20px;
+                    margin-top: 20px;
+                }
+                .stat-card {
+                    background: #1c1c22;
+                    padding: 20px;
+                    border-radius: 15px;
+                    min-width: 180px;
+                    text-align: center;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+                }
+                .stat-card .label {
+                    font-size: 1.1em;
+                    color: #aaa;
+                }
+                .stat-card .value {
+                    font-size: 1.8em;
+                    font-weight: bold;
+                    margin-top: 5px;
+                    color: #fff;
+                }
+                .info-box {
+                    background: #2b2b31;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin: 20px auto;
+                    max-width: 500px;
+                    text-align: center;
+                    font-size: 0.95em;
+                    color: #ccc;
+                }
+                .history, .leaderboard {
                     display: flex;
                     flex-wrap: wrap;
                     justify-content: center;
@@ -197,27 +243,31 @@ def index():
                     margin-top: 20px;
                 }
                 .card {
-                    background: rgba(255, 255, 255, 0.15);
-                    padding: 15px;
+                    background: #1c1c22;
+                    padding: 12px;
                     border-radius: 10px;
                     min-width: 150px;
                     text-align: center;
-                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
                 }
-                .history-card { min-width: 250px; }
+                .history-card { min-width: 160px; }
                 form {
                     text-align: center;
                     margin-top: 20px;
                 }
-                input[type=text], input[type=submit], button {
-                    padding: 5px;
+                input[type=text], input[type=submit] {
+                    padding: 8px 12px;
                     border-radius: 5px;
                     border: none;
+                    margin: 5px;
+                }
+                input[type=submit] {
+                    background: #2575fc;
+                    color: white;
                     cursor: pointer;
                 }
-                input[type=submit], button {
-                    background: #fff;
-                    color: #333;
+                input[type=submit]:hover {
+                    background: #1a5ed8;
                 }
             </style>
         </head>
@@ -225,10 +275,26 @@ def index():
             <h1>Skyblock GDP Stats</h1>
             
             <div class="stats">
-                <div class="card">Count: {{ stats.count }}</div>
-                <div class="card">Current: {{ "{:,}".format(stats.current) }}</div>
-                <div class="card">Total: {{ "{:,}".format(stats.total) }}</div>
-                <div class="card">Average per min: {{ "{:,}".format(avg|int) }}</div>
+                <div class="stat-card">
+                    <div class="label">Count</div>
+                    <div class="value">{{ stats.count }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Current</div>
+                    <div class="value">{{ "{:,}".format(stats.current) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Total</div>
+                    <div class="value">{{ "{:,}".format(stats.total) }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Average/min</div>
+                    <div class="value">{{ "{:,}".format(avg|int) }}</div>
+                </div>
+            </div>
+
+            <div class="info-box">
+                ℹ️ Each <strong>count</strong> represents 1 minute of auction house purchases.
             </div>
 
             <h2>History</h2>
@@ -273,6 +339,7 @@ def index():
     </html>
     """, stats=stats, avg=avg, top_buyers=top_buyers,
        search_result=search_result, request=request, search_name=search_name)
+
 
 
 
