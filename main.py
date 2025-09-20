@@ -15,7 +15,7 @@ stats = {
     "current": 0,
     "total": 0,
     "history": [],
-    "buyers": {}  # UUID: total_spent
+    "buyers": {}  # UUID: {name: str, spent: int}
 }
 
 # Cache for UUID -> username
@@ -56,6 +56,9 @@ async def fetch_uuid(session, uuid):
                 data = await r.json()
                 name = data.get("name", uuid[:8])
                 uuid_cache[uuid] = name
+                # also update stats buyers if exists
+                if uuid in stats["buyers"]:
+                    stats["buyers"][uuid]["name"] = name
                 return True
     except Exception as e:
         print(f"Error converting UUID {uuid}: {e}")
@@ -82,9 +85,11 @@ async def convert_uuid(session, uuid):
 def uuid_to_name(uuid):
     if uuid in uuid_cache:
         return uuid_cache[uuid]
+    if uuid in stats["buyers"] and "name" in stats["buyers"][uuid]:
+        return stats["buyers"][uuid]["name"]
     if uuid not in uuid_queue:
         uuid_queue[uuid] = 0
-    return uuid[:8]  # fallback short UUID
+    return uuid[:8]  # fallback
 
 # === Background Stats Fetch ===
 def fetch_stats():
@@ -111,8 +116,13 @@ def fetch_stats():
                     buyer_uuid = auction.get("buyer")
                     price = auction["price"]
                     if buyer_uuid:
-                        stats["buyers"][buyer_uuid] = stats["buyers"].get(buyer_uuid, 0) + price
-                        # add to UUID queue
+                        buyer_data = stats["buyers"].get(
+                            buyer_uuid, {"name": uuid_to_name(buyer_uuid), "spent": 0}
+                        )
+                        buyer_data["spent"] += price
+                        buyer_data["name"] = uuid_to_name(buyer_uuid)
+                        stats["buyers"][buyer_uuid] = buyer_data
+
                         if buyer_uuid not in uuid_cache and buyer_uuid not in uuid_queue:
                             uuid_queue[buyer_uuid] = 0
 
@@ -131,18 +141,20 @@ def fetch_stats():
 def index():
     avg = stats["total"] / stats["count"] if stats["count"] > 0 else 0
 
-    # Convert buyers to usernames safely
-    buyer_list = [(uuid_to_name(uuid), stats["buyers"][uuid]) for uuid in list(stats["buyers"].keys())]
-    buyer_list.sort(key=lambda x: x[1], reverse=True)
-    top_buyers = buyer_list[:10]
+    # Build buyer list with UUID, name, spent
+    buyer_list = [(uuid, data["name"], data["spent"]) for uuid, data in stats["buyers"].items()]
+    buyer_list.sort(key=lambda x: x[2], reverse=True)
+
+    # Top 10 with ranks
+    top_buyers = [(i+1, name, spent) for i, (_, name, spent) in enumerate(buyer_list[:10])]
 
     # Search feature
     search_name = request.args.get("search", "").strip()
     search_result = None
     if search_name:
-        for name, spent in buyer_list:
+        for i, (_, name, spent) in enumerate(buyer_list):
             if name.lower() == search_name.lower():
-                search_result = (name, spent)
+                search_result = (name, spent, i+1)  # include rank
                 break
 
     return render_template_string("""
@@ -184,9 +196,9 @@ def index():
 
         <h2>Top 10 Buyers</h2>
         <div class="leaderboard">
-            {% for name, spent in top_buyers %}
+            {% for rank, name, spent in top_buyers %}
                 <div class="card">
-                    <strong>{{ name }}</strong><br>{{ "{:,}".format(spent) }}
+                    <strong>{{ rank }}. {{ name }}</strong><br>{{ "{:,}".format(spent) }}
                 </div>
             {% endfor %}
         </div>
@@ -198,7 +210,7 @@ def index():
 
         {% if search_result %}
             <div class="card" style="margin:20px auto; max-width:300px;">
-                <strong>{{ search_result[0] }}</strong><br>
+                <strong>{{ search_result[0] }} (#{{ search_result[2] }})</strong><br>
                 Total spent: {{ "{:,}".format(search_result[1]) }}
             </div>
         {% elif search_name %}
